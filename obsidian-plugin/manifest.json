@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-hermes-sync",
+  "name": "Hermes Vault Sync",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Real-time bidirectional vault sync with the Hermes API server. Enables AI agents and humans to read/write notes simultaneously.",
+  "author": "Hermes",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}

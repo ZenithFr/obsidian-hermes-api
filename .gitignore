@@ -1,0 +1,27 @@
+# === Python ===
+server/.venv/
+server/__pycache__/
+server/routers/__pycache__/
+server/*.pyc
+server/*.pyo
+server/hermes.db
+server/hermes.db-shm
+server/hermes.db-wal
+
+# === Secrets ===
+server/.env
+
+# === Vault (user data — not tracked) ===
+server/vault/
+
+# === Node / Obsidian Plugin ===
+obsidian-plugin/node_modules/
+
+# === Compiled plugin output (users build locally) ===
+obsidian-plugin/main.js
+obsidian-plugin/main.js.map
+
+# === OS ===
+.DS_Store
+Thumbs.db
+desktop.ini
