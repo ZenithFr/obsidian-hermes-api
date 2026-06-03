@@ -59,17 +59,16 @@ def _sanitize_path(vault_path: str, relative_path: str) -> Path:
     summary="List all markdown notes in the vault",
     description="""Returns a JSON array of all .md file paths relative to the configured vault root.
 
-Use this endpoint to discover which notes exist before reading or modifying them.
+If `include_content=true`, the `files` array will contain objects with `path` and `content`.
+Use this endpoint to discover which notes exist before reading or modifying them, or to bulk pull.
 Paths use forward-slash separators regardless of the host operating system.
-
-An AI agent (Hermes) should call this first to enumerate available knowledge before
-deciding which notes to read or update.
 """,
 )
 async def list_files(
+    include_content: bool = False,
     token_data: dict = Depends(get_current_token),
 ) -> JSONResponse:
-    """List all markdown files in the vault directory."""
+    """List all markdown files in the vault directory, optionally including their content."""
     vault_path = await get_vault_path()
     vault_root = Path(vault_path).resolve()
 
@@ -79,19 +78,34 @@ async def list_files(
             detail=f"Vault directory does not exist: {vault_path}",
         )
 
-    md_files: list[str] = []
+    md_files = []
+    
+    # Collect all markdown files
     for file in vault_root.rglob("*.md"):
-        relative = file.relative_to(vault_root)
-        # Always use forward-slash separators in the response.
-        md_files.append(str(relative).replace("\\", "/"))
+        relative = str(file.relative_to(vault_root)).replace("\\", "/")
+        if include_content:
+            try:
+                content = file.read_text(encoding="utf-8")
+                md_files.append({
+                    "path": relative,
+                    "content": content,
+                })
+            except Exception:
+                # Skip unreadable files or binary files accidentally named .md
+                pass
+        else:
+            md_files.append(relative)
 
-    md_files.sort()
+    if not include_content:
+        md_files.sort()
+    else:
+        md_files.sort(key=lambda x: x["path"])
 
     await add_audit(
         method="GET",
         path=None,
         token_id=token_data["id"],
-        action="READ_LIST",
+        action="READ_LIST_BULK" if include_content else "READ_LIST",
     )
 
     return JSONResponse(

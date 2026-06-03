@@ -27,8 +27,6 @@ export class HermesWsClient {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sendQueue: FileModifyPayload[] = [];
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingPayload: FileModifyPayload | null = null;
   private autoReconnect = true;
 
   // Stored so reconnect can use them without re-passing
@@ -125,11 +123,6 @@ export class HermesWsClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
-      this.debounceTimer = null;
-    }
-    this.pendingPayload = null;
 
     if (this.ws) {
       // Prevent onclose from scheduling a reconnect
@@ -149,8 +142,7 @@ export class HermesWsClient {
   }
 
   /**
-   * Debounced send: waits 800 ms after the last call before actually sending.
-   * While disconnected the payload is queued (up to MAX_QUEUE_SIZE items).
+   * Instantly sends a modify payload, or queues it if disconnected.
    */
   sendFileModify(path: string, content: string): void {
     const payload: FileModifyPayload = {
@@ -159,26 +151,11 @@ export class HermesWsClient {
       content,
     };
 
-    // Replace any previous pending payload for this path to collapse rapid edits
-    this.pendingPayload = payload;
-
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
+    if (this.state === WsState.CONNECTED && this.ws) {
+      this.rawSend(payload);
+    } else {
+      this.enqueue(payload);
     }
-
-    this.debounceTimer = setTimeout(() => {
-      this.debounceTimer = null;
-      const toSend = this.pendingPayload;
-      this.pendingPayload = null;
-
-      if (!toSend) return;
-
-      if (this.state === WsState.CONNECTED && this.ws) {
-        this.rawSend(toSend);
-      } else {
-        this.enqueue(toSend);
-      }
-    }, DEBOUNCE_MS);
   }
 
   sendFileDelete(path: string): void {

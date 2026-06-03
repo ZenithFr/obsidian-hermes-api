@@ -7,6 +7,7 @@ export default class HermesPlugin extends Plugin {
   settings!: HermesSettings;
   wsClient!: HermesWsClient;
   private statusBarItem!: HTMLElement;
+  private modifyDebounceTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -25,7 +26,9 @@ export default class HermesPlugin extends Plugin {
       if (file instanceof TFile) {
         // Echo-loop prevention: only write if content actually differs
         const currentContent = await this.app.vault.read(file);
-        if (currentContent !== payload.content) {
+        const normalizedLocal = currentContent.replace(/\r\n/g, '\n');
+        const normalizedRemote = payload.content.replace(/\r\n/g, '\n');
+        if (normalizedLocal !== normalizedRemote) {
           await this.app.vault.modify(file, payload.content);
         }
       } else if (!file) {
@@ -96,16 +99,24 @@ export default class HermesPlugin extends Plugin {
 
     // ── Vault Events ──────────────────────────────────────────────────────────
     this.registerEvent(
-      this.app.vault.on('modify', async (file: TFile) => {
+      this.app.vault.on('modify', (file: TFile) => {
         if (!this.settings.syncOnModify) return;
 
-        if (this.wsClient.getState() === WsState.CONNECTED) {
-          const content = await this.app.vault.read(file);
-          this.wsClient.sendFileModify(file.path, content);
-        } else if (this.settings.serverUrl && this.settings.apiToken) {
-          // HTTP fallback when WebSocket is not available
-          await this.httpFallbackWrite(file);
+        if (this.modifyDebounceTimers.has(file.path)) {
+          clearTimeout(this.modifyDebounceTimers.get(file.path)!);
         }
+
+        const timer = setTimeout(async () => {
+          this.modifyDebounceTimers.delete(file.path);
+          if (this.wsClient.getState() === WsState.CONNECTED) {
+            const content = await this.app.vault.read(file);
+            this.wsClient.sendFileModify(file.path, content);
+          } else if (this.settings.serverUrl && this.settings.apiToken) {
+            await this.httpFallbackWrite(file);
+          }
+        }, 800);
+
+        this.modifyDebounceTimers.set(file.path, timer);
       })
     );
 
@@ -156,7 +167,7 @@ export default class HermesPlugin extends Plugin {
     new Notice('Hermes: Syncing files from server...');
     try {
       const listResp = await requestUrl({
-        url: `${this.settings.serverUrl.replace(/\/$/, '')}/api/files`,
+        url: `${this.settings.serverUrl.replace(/\/$/, '')}/api/files?include_content=true`,
         headers: { Authorization: `Bearer ${this.settings.apiToken}` }
       });
       const data = listResp.json;
@@ -165,18 +176,16 @@ export default class HermesPlugin extends Plugin {
       let created = 0;
       let updated = 0;
 
-      for (const path of data.files) {
-        const encodedPath = path.split('/').map((s: string) => encodeURIComponent(s)).join('/');
-        const fileResp = await requestUrl({
-          url: `${this.settings.serverUrl.replace(/\/$/, '')}/api/files/${encodedPath}`,
-          headers: { Authorization: `Bearer ${this.settings.apiToken}` }
-        });
-        const remoteContent = fileResp.text;
+      for (const item of data.files) {
+        const path = item.path;
+        const remoteContent = item.content;
         
         const localFile = this.app.vault.getAbstractFileByPath(path);
         if (localFile instanceof TFile) {
           const localContent = await this.app.vault.read(localFile);
-          if (localContent !== remoteContent) {
+          const normalizedLocal = localContent.replace(/\r\n/g, '\n');
+          const normalizedRemote = remoteContent.replace(/\r\n/g, '\n');
+          if (normalizedLocal !== normalizedRemote) {
             await this.app.vault.modify(localFile, remoteContent);
             updated++;
           }
