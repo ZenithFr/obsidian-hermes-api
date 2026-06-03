@@ -31,7 +31,7 @@ export default class HermesPlugin extends Plugin {
       } else if (!file) {
         // File doesn't exist locally yet — create it
         try {
-          // Ensure parent directories exist by creating the file with full path
+          await this.ensureFolderExists(payload.path);
           await this.app.vault.create(payload.path, payload.content);
         } catch (err) {
           console.error('[Hermes] Failed to create file from remote change:', err);
@@ -39,12 +39,27 @@ export default class HermesPlugin extends Plugin {
       }
     };
 
-    this.wsClient.onFileDeleted = (payload) => {
-      // We intentionally do NOT auto-delete from the vault — too destructive.
-      // Instead, inform the user so they can decide.
-      new Notice(
-        `🗑️ Hermes: Remote deletion of "${payload.path}" — file kept locally. Remove manually if desired.`
-      );
+    this.wsClient.onFileDeleted = async (payload) => {
+      const file = this.app.vault.getAbstractFileByPath(payload.path);
+      if (file) {
+        try {
+          await this.app.vault.trash(file, false); // move to system trash
+        } catch (err) {
+          console.error('[Hermes] Failed to process remote delete:', err);
+        }
+      }
+    };
+
+    this.wsClient.onFileRenamed = async (payload) => {
+      const file = this.app.vault.getAbstractFileByPath(payload.old_path);
+      if (file) {
+        try {
+          await this.ensureFolderExists(payload.new_path);
+          await this.app.vault.rename(file, payload.new_path);
+        } catch (err) {
+          console.error('[Hermes] Failed to process remote rename:', err);
+        }
+      }
     };
 
     this.wsClient.onStateChange = (state: WsState) => {
@@ -53,6 +68,7 @@ export default class HermesPlugin extends Plugin {
 
     this.wsClient.onConnected = (clientId: string) => {
       console.log(`[Hermes] Connected. Client ID: ${clientId}`);
+      this.pullAllFiles();
     };
 
     this.wsClient.onError = (payload) => {
@@ -71,7 +87,14 @@ export default class HermesPlugin extends Plugin {
       this.connectWs();
     }
 
-    // ── Vault Modify Event ────────────────────────────────────────────────────
+    // ── Commands ──────────────────────────────────────────────────────────────
+    this.addCommand({
+      id: 'hermes-pull-all',
+      name: 'Pull all files from server',
+      callback: () => this.pullAllFiles(),
+    });
+
+    // ── Vault Events ──────────────────────────────────────────────────────────
     this.registerEvent(
       this.app.vault.on('modify', async (file: TFile) => {
         if (!this.settings.syncOnModify) return;
@@ -82,6 +105,24 @@ export default class HermesPlugin extends Plugin {
         } else if (this.settings.serverUrl && this.settings.apiToken) {
           // HTTP fallback when WebSocket is not available
           await this.httpFallbackWrite(file);
+        }
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on('delete', (file: TFile) => {
+        if (!this.settings.syncOnModify) return;
+        if (this.wsClient.getState() === WsState.CONNECTED) {
+          this.wsClient.sendFileDelete(file.path);
+        }
+      })
+    );
+
+    this.registerEvent(
+      this.app.vault.on('rename', (file: TFile, oldPath: string) => {
+        if (!this.settings.syncOnModify) return;
+        if (this.wsClient.getState() === WsState.CONNECTED) {
+          this.wsClient.sendFileRename(oldPath, file.path);
         }
       })
     );
@@ -107,6 +148,54 @@ export default class HermesPlugin extends Plugin {
 
   connectWs(): void {
     this.wsClient.connect(this.settings.serverUrl, this.settings.apiToken);
+  }
+
+  async pullAllFiles(): Promise<void> {
+    if (!this.settings.serverUrl || !this.settings.apiToken) return;
+    
+    new Notice('Hermes: Syncing files from server...');
+    try {
+      const listResp = await requestUrl({
+        url: `${this.settings.serverUrl.replace(/\/$/, '')}/api/files`,
+        headers: { Authorization: `Bearer ${this.settings.apiToken}` }
+      });
+      const data = listResp.json;
+      if (!data || !data.files) return;
+
+      let created = 0;
+      let updated = 0;
+
+      for (const path of data.files) {
+        const encodedPath = path.split('/').map((s: string) => encodeURIComponent(s)).join('/');
+        const fileResp = await requestUrl({
+          url: `${this.settings.serverUrl.replace(/\/$/, '')}/api/files/${encodedPath}`,
+          headers: { Authorization: `Bearer ${this.settings.apiToken}` }
+        });
+        const remoteContent = fileResp.text;
+        
+        const localFile = this.app.vault.getAbstractFileByPath(path);
+        if (localFile instanceof TFile) {
+          const localContent = await this.app.vault.read(localFile);
+          if (localContent !== remoteContent) {
+            await this.app.vault.modify(localFile, remoteContent);
+            updated++;
+          }
+        } else if (!localFile) {
+          await this.ensureFolderExists(path);
+          await this.app.vault.create(path, remoteContent);
+          created++;
+        }
+      }
+      
+      if (created > 0 || updated > 0) {
+        new Notice(`Hermes Sync Complete! Created: ${created}, Updated: ${updated}`);
+      } else {
+        new Notice('Hermes Sync Complete: Vault is up to date.');
+      }
+    } catch (err) {
+      console.error('[Hermes] Pull failed:', err);
+      new Notice('Hermes Sync Failed. Check console.');
+    }
   }
 
   async httpFallbackWrite(file: TFile): Promise<void> {
@@ -151,6 +240,24 @@ export default class HermesPlugin extends Plugin {
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────────
+
+  private async ensureFolderExists(filePath: string): Promise<void> {
+    const parts = filePath.split('/');
+    parts.pop(); // remove filename
+    let currentPath = '';
+    
+    for (const part of parts) {
+      currentPath = currentPath === '' ? part : `${currentPath}/${part}`;
+      const folder = this.app.vault.getAbstractFileByPath(currentPath);
+      if (!folder) {
+        try {
+          await this.app.vault.createFolder(currentPath);
+        } catch (err) {
+          // Ignore if it was created concurrently
+        }
+      }
+    }
+  }
 
   private updateStatusBar(state: WsState): void {
     const labels: Record<WsState, string> = {

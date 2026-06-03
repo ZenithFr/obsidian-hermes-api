@@ -167,68 +167,110 @@ async def websocket_sync(websocket: WebSocket, token: str = "") -> None:
 
             msg_type = payload.get("type")
 
-            if msg_type != "FILE_MODIFY":
+            if msg_type not in ("FILE_MODIFY", "FILE_DELETE", "FILE_RENAME"):
                 await websocket.send_json(
                     {
                         "type": "ERROR",
                         "code": "UNKNOWN_TYPE",
-                        "message": f"Unknown message type: '{msg_type}'. Expected 'FILE_MODIFY'.",
+                        "message": f"Unknown message type: '{msg_type}'. Expected FILE_MODIFY, FILE_DELETE, or FILE_RENAME.",
                     }
                 )
                 continue
 
             # ── Validate payload ──────────────────────────────────────────────
             file_path: str | None = payload.get("path")
-            content: str | None = payload.get("content")
-
-            if not file_path or content is None:
-                await websocket.send_json(
-                    {
-                        "type": "ERROR",
-                        "code": "INVALID_PAYLOAD",
-                        "message": "Payload must include non-empty 'path' and 'content' fields.",
-                    }
-                )
+            if not file_path:
+                await websocket.send_json({"type": "ERROR", "code": "INVALID_PAYLOAD", "message": "'path' is required."})
                 continue
-
+            
             # ── Path sanitization ─────────────────────────────────────────────
             vault_path = await get_vault_path()
             try:
                 target_file = _sanitize_path(vault_path, file_path)
             except ValueError as exc:
-                await websocket.send_json(
+                await websocket.send_json({"type": "ERROR", "code": "PATH_TRAVERSAL", "message": str(exc)})
+                continue
+            # ── Handle FILE_MODIFY ────────────────────────────────────────────
+            if msg_type == "FILE_MODIFY":
+                content: str | None = payload.get("content")
+                if content is None:
+                    await websocket.send_json(
+                        {
+                            "type": "ERROR",
+                            "code": "INVALID_PAYLOAD",
+                            "message": "FILE_MODIFY requires 'content'.",
+                        }
+                    )
+                    continue
+
+                target_file.parent.mkdir(parents=True, exist_ok=True)
+                target_file.write_text(content, encoding="utf-8")
+                ts = _utcnow_iso()
+                await manager.broadcast(
                     {
-                        "type": "ERROR",
-                        "code": "PATH_TRAVERSAL",
-                        "message": str(exc),
+                        "type": "FILE_CHANGED",
+                        "path": file_path,
+                        "content": content,
+                        "source": "ws",
+                        "ts": ts,
                     }
                 )
-                continue
+                await add_audit(method="WS", path=file_path, token_id=token_data["id"], action="WRITE")
 
-            # ── Write file ────────────────────────────────────────────────────
-            target_file.parent.mkdir(parents=True, exist_ok=True)
-            target_file.write_text(content, encoding="utf-8")
+            # ── Handle FILE_DELETE ────────────────────────────────────────────
+            elif msg_type == "FILE_DELETE":
+                if target_file.exists():
+                    if target_file.is_file():
+                        target_file.unlink()
+                    elif target_file.is_dir():
+                        import shutil
+                        shutil.rmtree(target_file)
+                
+                ts = _utcnow_iso()
+                await manager.broadcast(
+                    {
+                        "type": "FILE_DELETED",
+                        "path": file_path,
+                        "source": "ws",
+                        "ts": ts,
+                    }
+                )
+                await add_audit(method="WS", path=file_path, token_id=token_data["id"], action="DELETE")
 
-            ts = _utcnow_iso()
+            # ── Handle FILE_RENAME ────────────────────────────────────────────
+            elif msg_type == "FILE_RENAME":
+                new_path: str | None = payload.get("new_path")
+                if not new_path:
+                    await websocket.send_json(
+                        {
+                            "type": "ERROR",
+                            "code": "INVALID_PAYLOAD",
+                            "message": "FILE_RENAME requires 'new_path'.",
+                        }
+                    )
+                    continue
+                
+                try:
+                    target_new = _sanitize_path(vault_path, new_path)
+                except ValueError as exc:
+                    await websocket.send_json({"type": "ERROR", "code": "PATH_TRAVERSAL", "message": str(exc)})
+                    continue
 
-            # ── Broadcast to all clients ──────────────────────────────────────
-            await manager.broadcast(
-                {
-                    "type": "FILE_CHANGED",
-                    "path": file_path,
-                    "content": content,
-                    "source": "ws",
-                    "ts": ts,
-                }
-            )
+                if target_file.exists():
+                    target_new.parent.mkdir(parents=True, exist_ok=True)
+                    target_file.rename(target_new)
 
-            # ── Audit ─────────────────────────────────────────────────────────
-            await add_audit(
-                method="WS",
-                path=file_path,
-                token_id=token_data["id"],
-                action="WRITE",
-            )
+                ts = _utcnow_iso()
+                await manager.broadcast(
+                    {
+                        "type": "FILE_RENAMED",
+                        "old_path": file_path,
+                        "new_path": new_path,
+                        "source": "ws",
+                        "ts": ts,
+                    }
+                )
+                await add_audit(method="WS", path=f"{file_path} -> {new_path}", token_id=token_data["id"], action="RENAME")
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket)

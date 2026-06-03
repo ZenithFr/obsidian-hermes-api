@@ -231,6 +231,69 @@ async def write_file(
     )
 
 
+# ── POST /api/files/rename ─────────────────────────────────────────────────────
+
+from pydantic import BaseModel
+
+class RenamePayload(BaseModel):
+    old_path: str
+    new_path: str
+
+@router.post(
+    "/rename",
+    summary="Rename or move a markdown note",
+    description="""Renames or moves a file to a new path.
+    
+All connected Obsidian clients instantly receive a `FILE_RENAMED` WebSocket broadcast.
+""",
+    status_code=status.HTTP_200_OK,
+)
+async def rename_file(
+    payload: RenamePayload,
+    token_data: dict = Depends(get_current_token),
+) -> JSONResponse:
+    """Rename a vault markdown file and broadcast the event."""
+    vault_path = await get_vault_path()
+    target_old = _sanitize_path(vault_path, payload.old_path)
+    target_new = _sanitize_path(vault_path, payload.new_path)
+
+    if not target_old.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"File not found: {payload.old_path}",
+        )
+
+    target_new.parent.mkdir(parents=True, exist_ok=True)
+    target_old.rename(target_new)
+
+    ts = _utcnow_iso()
+
+    await manager.broadcast(
+        {
+            "type": "FILE_RENAMED",
+            "old_path": payload.old_path,
+            "new_path": payload.new_path,
+            "source": "rest",
+            "ts": ts,
+        }
+    )
+
+    await add_audit(
+        method="POST",
+        path=f"{payload.old_path} -> {payload.new_path}",
+        token_id=token_data["id"],
+        action="RENAME",
+    )
+
+    return JSONResponse(
+        content={
+            "old_path": payload.old_path,
+            "new_path": payload.new_path,
+            "status": "renamed",
+        }
+    )
+
+
 # ── DELETE /api/files/{path} ───────────────────────────────────────────────────
 
 

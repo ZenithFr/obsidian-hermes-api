@@ -1,7 +1,10 @@
 import {
   FileChangedPayload,
   FileDeletedPayload,
+  FileRenamedPayload,
   FileModifyPayload,
+  FileDeletePayload,
+  FileRenamePayload,
   ConnectedPayload,
   ErrorPayload,
   InboundPayload,
@@ -35,6 +38,7 @@ export class HermesWsClient {
   // Callbacks set by the plugin
   public onFileChanged: ((payload: FileChangedPayload) => void) | null = null;
   public onFileDeleted: ((payload: FileDeletedPayload) => void) | null = null;
+  public onFileRenamed: ((payload: FileRenamedPayload) => void) | null = null;
   public onStateChange: ((state: WsState) => void) | null = null;
   public onConnected: ((clientId: string) => void) | null = null;
   public onError: ((payload: ErrorPayload) => void) | null = null;
@@ -177,6 +181,24 @@ export class HermesWsClient {
     }, DEBOUNCE_MS);
   }
 
+  sendFileDelete(path: string): void {
+    const payload: FileDeletePayload = { type: 'FILE_DELETE', path };
+    if (this.state === WsState.CONNECTED && this.ws) {
+      this.rawSend(payload as unknown as FileModifyPayload); // cast for rawSend
+    } else {
+      this.enqueue(payload as unknown as FileModifyPayload);
+    }
+  }
+
+  sendFileRename(oldPath: string, newPath: string): void {
+    const payload: FileRenamePayload = { type: 'FILE_RENAME', path: oldPath, new_path: newPath };
+    if (this.state === WsState.CONNECTED && this.ws) {
+      this.rawSend(payload as unknown as FileModifyPayload); // cast for rawSend
+    } else {
+      this.enqueue(payload as unknown as FileModifyPayload);
+    }
+  }
+
   flushQueue(): void {
     if (this.state !== WsState.CONNECTED || !this.ws) return;
 
@@ -238,6 +260,12 @@ export class HermesWsClient {
       case 'FILE_DELETED':
         if (this.onFileDeleted) {
           this.onFileDeleted(payload);
+        }
+        break;
+
+      case 'FILE_RENAMED':
+        if (this.onFileRenamed) {
+          this.onFileRenamed(payload as FileRenamedPayload);
         }
         break;
 

@@ -31,6 +31,14 @@ export interface FileDeletedPayload {
   ts: string;
 }
 
+export interface FileRenamedPayload {
+  type: 'FILE_RENAMED';
+  old_path: string;
+  new_path: string;
+  source: 'ws' | 'rest';
+  ts: string;
+}
+
 export interface ConnectedPayload {
   type: 'CONNECTED';
   client_id: string;
@@ -42,11 +50,23 @@ export interface ErrorPayload {
   message: string;
 }
 
-// Outbound from client → server
+// ─── WebSocket Payloads ──────────────────────────────────────────────────────
+
 export interface FileModifyPayload {
   type: 'FILE_MODIFY';
   path: string;
   content: string;
+}
+
+export interface FileDeletePayload {
+  type: 'FILE_DELETE';
+  path: string;
+}
+
+export interface FileRenamePayload {
+  type: 'FILE_RENAME';
+  new_path: string;
+  path: string; // the old path
 }
 
 // Quick Import config (base64 JSON from dashboard)
@@ -58,5 +78,6 @@ export interface QuickImportConfig {
 export type InboundPayload =
   | FileChangedPayload
   | FileDeletedPayload
+  | FileRenamedPayload
   | ConnectedPayload
   | ErrorPayload;
