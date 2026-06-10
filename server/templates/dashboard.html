@@ -401,11 +401,6 @@
             <li>Enable the <strong>Obsidian API Sync</strong> plugin and open its settings.</li>
             <li>Click the <span class="text-on-surface font-medium">Quick Import</span> button and paste the copied payload.</li>
           </ol>
-          
-          <div class="mt-md pt-md border-t border-border">
-            <h4 class="text-label-sm text-muted mb-xs">JSON Preview</h4>
-            <pre id="connect-json-preview" class="text-caption font-mono text-primary-90 overflow-x-auto">{"server": "...", "token": "..."}</pre>
-          </div>
         </div>
       </div>
     </div>
@@ -632,16 +627,13 @@ function updateConnectConfig() {
   const sel = document.getElementById('connect-token-select');
   const man = document.getElementById('connect-token-manual');
   const out = document.getElementById('connect-config-output');
-  const prev = document.getElementById('connect-json-preview');
   const token = sel.value || man.value.trim();
   if (!token) { 
     out.value = ''; 
-    prev.textContent = '{"server": "...", "token": "..."}'; 
     return; 
   }
   const config = { server: window.location.origin, token };
   out.value = btoa(JSON.stringify(config));
-  prev.textContent = JSON.stringify(config, null, 2);
 }
 
 function copyConnectConfig() {
