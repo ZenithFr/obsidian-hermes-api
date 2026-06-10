@@ -31,9 +31,12 @@ export default class ObsidianApiSyncPlugin extends Plugin {
         const normalizedRemote = payload.content.replace(/\r\n/g, '\n');
         if (normalizedLocal !== normalizedRemote) {
           this.isApplyingRemoteChange = true;
-          await this.app.vault.modify(file, payload.content);
-          // Allow some time for editor-change events to fire and be ignored
-          setTimeout(() => { this.isApplyingRemoteChange = false; }, 50);
+          try {
+            await this.app.vault.modify(file, payload.content);
+          } finally {
+            // Allow some time for editor-change events to fire and be ignored
+            setTimeout(() => { this.isApplyingRemoteChange = false; }, 50);
+          }
         }
       } else if (!file) {
         // File doesn't exist locally yet — create it
@@ -109,8 +112,8 @@ export default class ObsidianApiSyncPlugin extends Plugin {
         if (!this.settings.syncOnModify) return;
         if (this.isApplyingRemoteChange) return;
 
-        const file = info?.file;
-        if (!file) return;
+        const file = info?.file || this.app.workspace.getActiveFile();
+        if (!(file instanceof TFile)) return;
 
         if (this.modifyDebounceTimers.has(file.path)) {
           clearTimeout(this.modifyDebounceTimers.get(file.path)!);
@@ -124,16 +127,18 @@ export default class ObsidianApiSyncPlugin extends Plugin {
           } else if (this.settings.serverUrl && this.settings.apiToken) {
             await this.httpFallbackWrite(file);
           }
-        }, this.settings.syncDebounceMs);
+        }, this.settings.syncDebounceMs || 150);
 
         this.modifyDebounceTimers.set(file.path, timer);
       })
     );
 
-    // 2. Fallback for non-editor modifications (e.g. other plugins)
+    // 2. Fallback for non-editor modifications (e.g. other plugins or syncing)
     this.registerEvent(
-      this.app.vault.on('modify', (file: TFile) => {
+      this.app.vault.on('modify', (file: TAbstractFile) => {
+        if (!(file instanceof TFile)) return;
         if (!this.settings.syncOnModify) return;
+        if (this.isApplyingRemoteChange) return; // ignore our own remote updates
 
         // If a timer is already running (e.g. from editor-change), don't override it
         if (this.modifyDebounceTimers.has(file.path)) return;
@@ -146,9 +151,26 @@ export default class ObsidianApiSyncPlugin extends Plugin {
           } else if (this.settings.serverUrl && this.settings.apiToken) {
             await this.httpFallbackWrite(file);
           }
-        }, this.settings.syncDebounceMs);
+        }, this.settings.syncDebounceMs || 150);
 
         this.modifyDebounceTimers.set(file.path, timer);
+      })
+    );
+
+    // 3. New File Creation
+    this.registerEvent(
+      this.app.vault.on('create', (file: TAbstractFile) => {
+        if (!(file instanceof TFile)) return;
+        if (!this.settings.syncOnModify) return;
+        if (this.isApplyingRemoteChange) return;
+
+        // Give Obsidian a tiny tick to finish writing the file to disk
+        setTimeout(async () => {
+          if (this.wsClient.getState() === WsState.CONNECTED) {
+            const content = await this.app.vault.read(file);
+            this.wsClient.sendFileModify(file.path, content);
+          }
+        }, 300);
       })
     );
 
