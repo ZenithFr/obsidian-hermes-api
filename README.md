@@ -157,7 +157,7 @@ All `/api/` endpoints require `Authorization: Bearer <token>`.
 
 ## AI Agent Integration
 
-Point your AI agent (Obsidian API Sync, Claude, GPT, etc.) at `/openapi.json`. Every endpoint carries verbose, action-oriented descriptions designed to be parsed as MCP tool definitions — no additional annotation needed.
+Point your AI agent (Hermes, Claude, GPT, etc.) at `/openapi.json`. Every endpoint carries verbose, action-oriented descriptions designed to be parsed as MCP tool definitions — no additional annotation needed.
 
 ```json
 {
@@ -165,6 +165,16 @@ Point your AI agent (Obsidian API Sync, Claude, GPT, etc.) at `/openapi.json`. E
   "token": "your-bearer-token"
 }
 ```
+
+### 🤖 Prompt for your Agent
+
+If you want an AI agent to set this project up for you automatically on your machine, copy and paste this exact prompt to them:
+
+> **You are setting up the Obsidian API Sync server.**
+> 1. The project has a `run.bat` (for Windows) and a `run.sh` (for Linux/macOS) in the root directory. These scripts automatically activate the virtual environment and start the FastAPI server.
+> 2. You should inspect the system to determine which script is appropriate.
+> 3. **Ask me** if I want to configure the service to run on boot.
+> 4. If I say yes, use the appropriate script (`run.bat` or `run.sh`) to set up a Windows Scheduled Task (running at Logon) or a Linux `systemd` service so that the API server starts automatically in the background whenever I start my machine.
 
 ## WebSocket Protocol
 
