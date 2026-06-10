@@ -1,4 +1,4 @@
-# Obsidian API Sync
+# <img src="server/static/assets/icon.png" alt="Obsidian API Sync Logo" width="48" height="48" align="center" style="border-radius: 8px;"> Obsidian API Sync
 
 > A Remote Vault Sync Ecosystem for Obsidian & AI Agents
 
