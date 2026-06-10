@@ -1,4 +1,4 @@
-import { Plugin, TFile, Notice, requestUrl } from 'obsidian';
+import { Plugin, TFile, TAbstractFile, Notice, requestUrl } from 'obsidian';
 import { ObsidianApiSyncSettings, DEFAULT_SETTINGS } from './types';
 import { ObsidianApiSyncWsClient, WsState, createWsClient } from './ws-client';
 import { ObsidianApiSyncSettingTab } from './settings';
@@ -175,7 +175,8 @@ export default class ObsidianApiSyncPlugin extends Plugin {
     );
 
     this.registerEvent(
-      this.app.vault.on('delete', (file: TFile) => {
+      this.app.vault.on('delete', (file: TAbstractFile) => {
+        if (!(file instanceof TFile)) return;
         if (!this.settings.syncOnModify) return;
         if (this.wsClient.getState() === WsState.CONNECTED) {
           this.wsClient.sendFileDelete(file.path);
@@ -184,7 +185,8 @@ export default class ObsidianApiSyncPlugin extends Plugin {
     );
 
     this.registerEvent(
-      this.app.vault.on('rename', (file: TFile, oldPath: string) => {
+      this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
+        if (!(file instanceof TFile)) return;
         if (!this.settings.syncOnModify) return;
         if (this.wsClient.getState() === WsState.CONNECTED) {
           this.wsClient.sendFileRename(oldPath, file.path);
@@ -230,24 +232,29 @@ export default class ObsidianApiSyncPlugin extends Plugin {
       let created = 0;
       let updated = 0;
 
-      for (const item of data.files) {
-        const path = item.path;
-        const remoteContent = item.content;
-        
-        const localFile = this.app.vault.getAbstractFileByPath(path);
-        if (localFile instanceof TFile) {
-          const localContent = await this.app.vault.read(localFile);
-          const normalizedLocal = localContent.replace(/\r\n/g, '\n');
-          const normalizedRemote = remoteContent.replace(/\r\n/g, '\n');
-          if (normalizedLocal !== normalizedRemote) {
-            await this.app.vault.modify(localFile, remoteContent);
-            updated++;
+      this.isApplyingRemoteChange = true;
+      try {
+        for (const item of data.files) {
+          const path = item.path;
+          const remoteContent = item.content;
+          
+          const localFile = this.app.vault.getAbstractFileByPath(path);
+          if (localFile instanceof TFile) {
+            const localContent = await this.app.vault.read(localFile);
+            const normalizedLocal = localContent.replace(/\r\n/g, '\n');
+            const normalizedRemote = remoteContent.replace(/\r\n/g, '\n');
+            if (normalizedLocal !== normalizedRemote) {
+              await this.app.vault.modify(localFile, remoteContent);
+              updated++;
+            }
+          } else if (!localFile) {
+            await this.ensureFolderExists(path);
+            await this.app.vault.create(path, remoteContent);
+            created++;
           }
-        } else if (!localFile) {
-          await this.ensureFolderExists(path);
-          await this.app.vault.create(path, remoteContent);
-          created++;
         }
+      } finally {
+        setTimeout(() => { this.isApplyingRemoteChange = false; }, 50);
       }
       
       if (created > 0 || updated > 0) {
